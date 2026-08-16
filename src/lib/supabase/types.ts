@@ -269,7 +269,17 @@ export interface Database {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      update_trust_score: {
+        Args: {
+          p_user_id: string;
+          p_delta: number;
+          p_event_type: string;
+          p_evidence?: Record<string, unknown> | null;
+        };
+        Returns: number;
+      };
+    };
     Enums: Record<string, never>;
   };
 }
