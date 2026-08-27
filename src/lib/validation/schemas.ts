@@ -1,5 +1,25 @@
 import { z } from "zod";
 
+// ─── URL safety ─────────────────────────────────────────────────────
+
+/**
+ * True only for http:// and https:// URLs.
+ *
+ * Blocks `javascript:`, `data:`, `vbscript:`, and other executable
+ * schemes that would run in a viewer's session when rendered as an
+ * anchor href. Exported so the render layer can gate on the exact
+ * same rule (defence in depth — validation can be bypassed by a
+ * crafted FormData POST that skips the client form).
+ */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 // ─── Enums ──────────────────────────────────────────────────────────
 
 export const userRoleSchema = z.enum(["student", "business", "admin"]);
@@ -171,7 +191,16 @@ export const createSubmissionSchema = z.object({
     .string()
     .max(2000, "Notes must be 2000 characters or fewer")
     .optional(),
-  deliverable_url: z.string().url("Must be a valid URL").optional(),
+  deliverable_url: z
+    .string()
+    .url("Must be a valid URL")
+    // `z.string().url()` accepts any structurally valid URL — including
+    // `javascript:` and `data:`, which execute when the reviewing client
+    // clicks the rendered link. Restrict to web schemes at the boundary.
+    .refine(isHttpUrl, {
+      message: "URL must start with http:// or https://",
+    })
+    .optional(),
 });
 
 // ─── Reviews ────────────────────────────────────────────────────────
