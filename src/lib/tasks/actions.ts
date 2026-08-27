@@ -25,14 +25,19 @@ import type { ActionResult } from "@/lib/auth/actions";
 
 export const VALID_TRANSITIONS: Record<
   string,
-  { to: string; by: "client" | "student" }[]
+  { to: string; by: "client" | "student" | "system" }[]
 > = {
   draft: [
     { to: "open", by: "client" },
     { to: "cancelled", by: "client" },
   ],
   open: [
-    { to: "in_progress", by: "client" }, // triggered via proposal acceptance
+    // "system" — this transition happens inside the accept_proposal RPC.
+    // It is illegal to invoke via updateTaskStatus (audit finding #3);
+    // the guard below rejects it explicitly, and the DB-level trigger
+    // added in migration 005 refuses to insert an assignment against a
+    // non-accepted proposal, closing the same hole at two layers.
+    { to: "in_progress", by: "system" },
     { to: "cancelled", by: "client" },
   ],
   in_progress: [
@@ -136,7 +141,13 @@ export async function updateTask(
     .single();
 
   if (fetchError || !task) return { error: "Task not found" };
-  if (task.client_id !== user.id) return { error: "You don't own this task" };
+
+  // ★ Audit finding #4 — generic message for every non-owner path so
+  //   we never disclose the task exists or its status to anyone else.
+  if (task.client_id !== user.id) {
+    return { error: "Task not found" };
+  }
+
   if (task.status !== "draft" && task.status !== "open") {
     return { error: "Only draft or open tasks can be edited" };
   }
@@ -235,6 +246,14 @@ export async function updateTaskStatus(
 
   if (fetchError || !task) return { error: "Task not found" };
 
+  // ★ Audit finding #4 — ownership check FIRST, so non-owners cannot
+  //   distinguish a status-transition error from a wrong-role error
+  //   and thereby learn the task's current status.  Every failure past
+  //   this point produces the same generic "Task not found" string.
+  if (task.client_id !== user.id) {
+    return { error: "Task not found" };
+  }
+
   // ── Validate transition ─────────────────────────────────────────
   const transitions = VALID_TRANSITIONS[task.status];
   if (!transitions) {
@@ -253,9 +272,16 @@ export async function updateTaskStatus(
     return { error: "This transition is handled by a different action" };
   }
 
-  // Verify ownership for client transitions
-  if (task.client_id !== user.id) {
-    return { error: "You don't own this task" };
+  // ★ Audit finding #3 — the open → in_progress edge is marked "system"
+  //   because it is only legal inside accept_proposal.  If a client
+  //   POSTed status="in_progress" directly, they could freeze a task
+  //   with no assigned student.  Refuse it here (belt) — the migration-005
+  //   trigger on task_assignments backs this up at the DB (braces).
+  if (allowed.by === "system") {
+    return {
+      error:
+        "This transition happens automatically via proposal acceptance",
+    };
   }
 
   // ── Persist ─────────────────────────────────────────────────────
@@ -283,19 +309,33 @@ export async function updateTaskStatus(
         .eq("task_id", taskId)
         .eq("status", "pending");
 
-      if (!rejectError) {
-        await Promise.all(
-          pendingProposals.map((p) =>
-            createNotification({
-              userId: p.student_id,
-              type: "proposal_rejected",
-              title: "Task cancelled",
-              message: `The task "${task.title}" was cancelled by the client. Keep applying to other tasks!`,
-              link: `/dashboard/proposals`,
-            }),
-          ),
-        );
+      // ★ Audit finding #2 — previously rejectError was swallowed and
+      //   we returned success even when the purge failed, leaving the
+      //   cancelled task with pending proposals that could still be
+      //   accepted.  Now we surface it: the task IS cancelled (that
+      //   write already committed above), but proposals are still
+      //   pending — the client must retry.  A single-transaction fix
+      //   would be an RPC like accept_proposal; leaving that as a
+      //   later refactor since the failure is transient in practice.
+      if (rejectError) {
+        revalidatePath(`/dashboard/tasks/${taskId}`);
+        return {
+          error:
+            "Task was cancelled but pending proposals could not be closed — please retry the cancel action.",
+        };
       }
+
+      await Promise.all(
+        pendingProposals.map((p) =>
+          createNotification({
+            userId: p.student_id,
+            type: "proposal_rejected",
+            title: "Task cancelled",
+            message: `The task "${task.title}" was cancelled by the client. Keep applying to other tasks!`,
+            link: `/dashboard/proposals`,
+          }),
+        ),
+      );
     }
   }
 

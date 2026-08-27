@@ -427,6 +427,19 @@ export interface Database {
         };
         Returns: number;
       };
+      /**
+       * Atomically accept a proposal. See migration 005 for details.
+       * Returns one row per auto-rejected peer proposal (the student_ids
+       * we should notify).
+       */
+      accept_proposal: {
+        Args: {
+          p_proposal_id: string;
+        };
+        Returns: {
+          rejected_student_id: string;
+        }[];
+      };
     };
     Enums: Record<string, never>;
   };

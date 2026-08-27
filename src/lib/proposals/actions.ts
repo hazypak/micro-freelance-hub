@@ -152,18 +152,25 @@ export async function withdrawProposal(
 // ─── Accept Proposal ───────────────────────────────────────────────
 
 /**
- * Accept a pending proposal — multi-step operation:
- *   1. Mark the proposal as "accepted"
- *   2. Create a task_assignment row
- *   3. Transition the task from "open" → "in_progress"
- *   4. Reject all other pending proposals for the same task
+ * Accept a pending proposal.
  *
  * Guard: business role, must own the task.
  *
- * ★ Why not a Postgres function? For this campus MVP, sequential
- *   server-side calls are acceptable. If two businesses could race
- *   to accept proposals on shared tasks, we'd need a DB-level lock.
- *   Since tasks have a single owner (client_id), this is safe.
+ * ★ Why an RPC instead of sequential writes?
+ *   The Supabase JS client has no transaction API — every .from().update()
+ *   is its own auto-committed statement.  The previous implementation ran
+ *   four sequential writes with best-effort compensating rollbacks, and
+ *   any transient network / DB blip between them could leave the proposal
+ *   `accepted` but the task still `open` (silent deadlock: audit #1).
+ *   Migration 005 defines `accept_proposal(p_proposal_id)` — one server-
+ *   side function, one transaction, `SELECT … FOR UPDATE` on the task row
+ *   to serialise concurrent accepts.  Any failure aborts the whole thing.
+ *
+ * ★ The RPC also folds in the audit-#4 fix by re-checking `client_id =
+ *   auth.uid()` inside the DB, using the same generic "not found" error
+ *   for every non-owner path.  We keep a cheap pre-check here to short-
+ *   circuit before the RPC round-trip, but the RPC is the authoritative
+ *   gate.
  */
 export async function acceptProposal(
   formData: FormData,
@@ -175,114 +182,60 @@ export async function acceptProposal(
 
   const supabase = await createClient();
 
-  // ── Fetch proposal with task ownership check ───────────────────
-  const { data: proposal, error: fetchError } = await supabase
+  // ── Cheap pre-check: fetch task title for notifications and confirm
+  //    the caller has any business reading this task at all.  If the
+  //    ownership check fails here we bail with the generic message —
+  //    same as the RPC would return — so nothing about task existence
+  //    leaks to non-owners (audit finding #4).
+  const { data: proposal } = await supabase
     .from("task_proposals")
-    .select("id, task_id, student_id, status")
+    .select("id, task_id, student_id, micro_tasks!inner(title, client_id)")
     .eq("id", proposalId)
     .single();
 
-  if (fetchError || !proposal) return { error: "Proposal not found" };
-  if (proposal.status !== "pending") {
-    return { error: "Only pending proposals can be accepted" };
+  if (!proposal || proposal.micro_tasks.client_id !== user.id) {
+    return { error: "Proposal not found" };
   }
 
-  // Verify the business user owns the task
-  const { data: task, error: taskError } = await supabase
-    .from("micro_tasks")
-    .select("id, client_id, status, title")
-    .eq("id", proposal.task_id)
-    .single();
+  // ── The atomic acceptance ─────────────────────────────────────
+  const { data: rejected, error: rpcError } = await supabase.rpc(
+    "accept_proposal",
+    { p_proposal_id: proposalId },
+  );
 
-  if (taskError || !task) return { error: "Task not found" };
-  if (task.client_id !== user.id) return { error: "Task not found" };
-  if (task.status !== "open") {
-    return { error: "Task is no longer open for proposals" };
-  }
-
-  // ── Step 1: Accept the proposal ────────────────────────────────
-  const { error: acceptError } = await supabase
-    .from("task_proposals")
-    .update({ status: "accepted" })
-    .eq("id", proposalId);
-
-  if (acceptError) {
+  if (rpcError) {
+    // The RPC raises with meaningful messages; forward the ones a
+    // business user can act on, hide the rest behind a generic string.
+    const msg = rpcError.message ?? "";
+    if (msg.includes("proposal not found")) {
+      return { error: "Proposal not found" };
+    }
+    if (msg.includes("proposal is not pending")) {
+      return { error: "Only pending proposals can be accepted" };
+    }
+    if (msg.includes("task is no longer open")) {
+      return { error: "Task is no longer open for proposals" };
+    }
     return { error: "Failed to accept proposal. Please try again." };
   }
 
-  // ── Step 2: Create task assignment ─────────────────────────────
-  const { error: assignError } = await supabase
-    .from("task_assignments")
-    .insert({
-      task_id: proposal.task_id,
-      student_id: proposal.student_id,
-      proposal_id: proposalId,
-    });
-
-  if (assignError) {
-    // Rollback step 1
-    await supabase
-      .from("task_proposals")
-      .update({ status: "pending" })
-      .eq("id", proposalId);
-    return { error: "Failed to assign task. Please try again." };
-  }
-
-  // ── Step 3: Transition task → in_progress ──────────────────────
-  const { error: statusError } = await supabase
-    .from("micro_tasks")
-    .update({ status: "in_progress" })
-    .eq("id", proposal.task_id);
-
-  if (statusError) {
-    // Rollback steps 1 & 2
-    await supabase
-      .from("task_assignments")
-      .delete()
-      .eq("proposal_id", proposalId);
-    await supabase
-      .from("task_proposals")
-      .update({ status: "pending" })
-      .eq("id", proposalId);
-    return { error: "Failed to update task status. Please try again." };
-  }
-
-  // ── Step 4: Reject other pending proposals ─────────────────────
-  // Fetch the other pending proposals BEFORE rejecting so we have
-  // their student_ids for notifications.
-  const { data: otherProposals } = await supabase
-    .from("task_proposals")
-    .select("id, student_id")
-    .eq("task_id", proposal.task_id)
-    .eq("status", "pending")
-    .neq("id", proposalId);
-
-  await supabase
-    .from("task_proposals")
-    .update({ status: "rejected" })
-    .eq("task_id", proposal.task_id)
-    .eq("status", "pending")
-    .neq("id", proposalId);
-
-  // ── Notifications (fire-and-forget) ───────────────────────────
-  // Notify the accepted student
+  // ── Notifications (fire-and-forget, outside the transaction) ───
   await createNotification({
     userId: proposal.student_id,
     type: "proposal_accepted",
     title: "Proposal accepted! 🎉",
-    message: `Your proposal on "${task.title}" was accepted. Time to get started!`,
+    message: `Your proposal on "${proposal.micro_tasks.title}" was accepted. Time to get started!`,
     link: `/dashboard/proposals`,
   });
 
-  // Notify each auto-rejected student
-  if (otherProposals?.length) {
+  if (rejected?.length) {
     await Promise.all(
-      otherProposals.map((p) =>
+      rejected.map((r) =>
         createNotification({
-          userId: p.student_id,
+          userId: r.rejected_student_id,
           type: "proposal_rejected",
           title: "Proposal not selected",
-          message: `Another proposal was chosen for "${task.title}". Keep applying!`,
+          message: `Another proposal was chosen for "${proposal.micro_tasks.title}". Keep applying!`,
           link: `/dashboard/proposals`,
         }),
       ),
