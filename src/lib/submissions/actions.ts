@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/guards";
-import { createSubmissionSchema } from "@/lib/validation/schemas";
+import { createSubmissionSchema, parseId } from "@/lib/validation/schemas";
 import { createNotification } from "@/lib/notifications/actions";
 import { VALID_TRANSITIONS } from "@/lib/tasks/actions";
 import type { ActionResult } from "@/lib/auth/actions";
@@ -157,12 +157,29 @@ export async function submitDeliverable(
     .eq("id", parsed.data.task_id);
 
   if (statusError) {
-    // Rollback the submission insert
-    await supabase
+    // ★ Audit finding #8: this compensating delete was previously
+    //   unchecked. If it ALSO failed, the submission row survived while
+    //   the task stayed `in_progress` — and the duplicate guard above
+    //   would then refuse every retry with "already submitted", locking
+    //   the student out of the task permanently.
+    //
+    //   The Supabase JS client has no transaction API, so a true fix is
+    //   an RPC like accept_proposal (migration 005). Until then, at
+    //   minimum distinguish the two failure modes so the student is told
+    //   whether retrying can help.
+    const { error: rollbackError } = await supabase
       .from("submissions")
       .delete()
       .eq("task_id", parsed.data.task_id)
       .eq("student_id", user.id);
+
+    if (rollbackError) {
+      return {
+        error:
+          "Your work was recorded but the task status could not be updated, and cleanup failed. Please contact support before resubmitting.",
+      };
+    }
+
     return { error: "Failed to update task status. Please try again." };
   }
 
@@ -270,11 +287,11 @@ export async function reviewSubmission(
 ): Promise<ActionResult> {
   const { user } = await requireRole("business");
 
-  const taskId = formData.get("taskId") as string;
-  const newStatus = formData.get("status") as string;
+  const taskId = parseId(formData.get("taskId"));
+  const newStatus = formData.get("status");
 
-  if (!taskId || !newStatus) {
-    return { error: "Task ID and status are required" };
+  if (!taskId || typeof newStatus !== "string" || !newStatus) {
+    return { error: "Task not found" };
   }
 
   const supabase = await createClient();

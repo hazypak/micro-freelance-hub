@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/guards";
-import { createTaskSchema, updateTaskSchema } from "@/lib/validation/schemas";
+import {
+  createTaskSchema,
+  updateTaskSchema,
+  parseId,
+} from "@/lib/validation/schemas";
 import { createNotification } from "@/lib/notifications/actions";
 import type { ActionResult } from "@/lib/auth/actions";
 
@@ -128,15 +132,15 @@ export async function updateTask(
 ): Promise<ActionResult> {
   const { user } = await requireRole("business");
 
-  const taskId = formData.get("taskId") as string;
-  if (!taskId) return { error: "Task ID is required" };
+  const taskId = parseId(formData.get("taskId"));
+  if (!taskId) return { error: "Task not found" };
 
   const supabase = await createClient();
 
   // ── Verify ownership & editable status ──────────────────────────
   const { data: task, error: fetchError } = await supabase
     .from("micro_tasks")
-    .select("id, client_id, status")
+    .select("id, client_id, status, budget, deadline")
     .eq("id", taskId)
     .single();
 
@@ -151,6 +155,24 @@ export async function updateTask(
   if (task.status !== "draft" && task.status !== "open") {
     return { error: "Only draft or open tasks can be edited" };
   }
+
+  // ── Terms lock (audit finding #6) ───────────────────────────────
+  //
+  // Students bid against the budget and deadline they can see. If the
+  // owner can silently rewrite those after proposals land, every
+  // outstanding bid is answering a question that no longer exists —
+  // a student who quoted RM150 for a 2-week job is still on record
+  // at RM150 when it becomes a 3-day job for RM40.
+  //
+  // We only care about proposals that are still live; rejected and
+  // withdrawn ones have no stake in the terms.
+  const { count: pendingProposalCount } = await supabase
+    .from("task_proposals")
+    .select("id", { count: "exact", head: true })
+    .eq("task_id", taskId)
+    .eq("status", "pending");
+
+  const hasLiveProposals = (pendingProposalCount ?? 0) > 0;
 
   // ── Build partial update from submitted fields ──────────────────
   const raw: Record<string, unknown> = {};
@@ -197,6 +219,15 @@ export async function updateTask(
     return { error: firstIssue?.message ?? "Invalid input" };
   }
 
+  // ── Apply the terms-lock policy (audit finding #6) ──────────────
+  if (hasLiveProposals) {
+    const violation = checkTermsLock(
+      { budget: task.budget, deadline: task.deadline },
+      parsed.data,
+    );
+    if (violation) return { error: violation };
+  }
+
   // ── Persist ─────────────────────────────────────────────────────
   const { error: updateError } = await supabase
     .from("micro_tasks")
@@ -229,10 +260,10 @@ export async function updateTaskStatus(
 ): Promise<ActionResult> {
   const { user } = await requireRole("business");
 
-  const taskId = formData.get("taskId") as string;
-  const newStatus = formData.get("status") as string;
-  if (!taskId || !newStatus) {
-    return { error: "Task ID and status are required" };
+  const taskId = parseId(formData.get("taskId"));
+  const newStatus = formData.get("status");
+  if (!taskId || typeof newStatus !== "string" || !newStatus) {
+    return { error: "Task not found" };
   }
 
   const supabase = await createClient();
@@ -362,8 +393,8 @@ export async function deleteTask(
 ): Promise<ActionResult> {
   const { user } = await requireRole("business");
 
-  const taskId = formData.get("taskId") as string;
-  if (!taskId) return { error: "Task ID is required" };
+  const taskId = parseId(formData.get("taskId"));
+  if (!taskId) return { error: "Task not found" };
 
   const supabase = await createClient();
 
@@ -392,6 +423,78 @@ export async function deleteTask(
 
   revalidatePath("/dashboard/tasks");
   redirect("/dashboard/tasks");
+}
+
+// ─── Terms lock ─────────────────────────────────────────────────────
+
+/** The subset of task terms that students bid against. */
+interface TaskTerms {
+  budget: number;
+  deadline: string | null;
+}
+
+/**
+ * Decide whether an edit to a task's terms is allowed while live
+ * (pending) proposals exist — audit finding #6.
+ *
+ * Called only when the task has at least one pending proposal.
+ *
+ * @param current  the task's terms as they stand in the database
+ * @param proposed the validated fields the owner is trying to write;
+ *                 keys are absent when that field wasn't submitted
+ * @returns an error message to block the edit, or null to allow it
+ *
+ * ─────────────────────────────────────────────────────────────────
+ * Policy: FAVOURABLE-ONLY.
+ *
+ * An edit is allowed only if it cannot make an outstanding bid worse
+ * than the terms it was written against. Concretely:
+ *
+ *   budget    may rise, never fall
+ *   deadline  may be extended or removed entirely, never brought
+ *             forward, and never *introduced* where none existed
+ *
+ * The asymmetry is the point. An owner who wants to sweeten a task to
+ * attract better bids should not have to tear down the ones they have;
+ * an owner who wants to cut the budget must reject the open proposals
+ * first, so nobody is held to a quote for a job that no longer exists.
+ * ─────────────────────────────────────────────────────────────────
+ */
+function checkTermsLock(
+  current: TaskTerms,
+  proposed: Partial<TaskTerms>,
+): string | null {
+  // ── Budget may rise, never fall ─────────────────────────────────
+  if (proposed.budget !== undefined && proposed.budget < current.budget) {
+    return "Budget cannot be reduced while proposals are pending. Raise it, or reject the open proposals first.";
+  }
+
+  // ── Deadline may only loosen ────────────────────────────────────
+  //
+  // `undefined` means the field wasn't submitted, and an explicit null
+  // clears the deadline — strictly more time, so both are fine.
+  if (proposed.deadline !== undefined && proposed.deadline !== null) {
+    const next = new Date(proposed.deadline);
+
+    // Malformed dates are already rejected by updateTaskSchema; bail
+    // out rather than compare against an Invalid Date, which makes
+    // every comparison false and would silently wave the edit through.
+    if (Number.isNaN(next.getTime())) {
+      return "Deadline is not a valid date";
+    }
+
+    if (current.deadline === null) {
+      // Students bid on an open-ended task; imposing a due date now is
+      // a new constraint they never priced in.
+      return "A deadline cannot be added while proposals are pending. Reject the open proposals first.";
+    }
+
+    if (next < new Date(current.deadline)) {
+      return "Deadline cannot be brought forward while proposals are pending. Extend it, or reject the open proposals first.";
+    }
+  }
+
+  return null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────

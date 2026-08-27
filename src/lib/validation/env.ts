@@ -36,9 +36,15 @@ export type ServerEnv = z.infer<typeof serverEnvSchema>;
  * Fails fast at import time if variables are missing.
  */
 export function getClientEnv(): ClientEnv {
+  // ★ NEXT_PUBLIC_SITE_URL must be listed here even though the schema
+  //   gives it a default. safeParse only sees the keys you hand it, so
+  //   omitting it made every caller silently receive the localhost
+  //   fallback — including in production, where the auth callback uses
+  //   this value to build redirect URLs.
   const parsed = clientEnvSchema.safeParse({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
   });
 
   if (!parsed.success) {

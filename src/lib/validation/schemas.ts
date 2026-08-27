@@ -20,6 +20,32 @@ export function isHttpUrl(value: string): boolean {
   }
 }
 
+// ─── Identifiers ────────────────────────────────────────────────────
+
+/** Any database primary key arriving from the client. */
+export const idSchema = z.string().uuid("Invalid identifier");
+
+/**
+ * Read a UUID out of FormData, returning null if it is absent or
+ * malformed.
+ *
+ * ★ Why (audit finding #5): server actions previously did
+ *   `formData.get("taskId") as string` and passed the result straight
+ *   into `.eq("id", …)`. The cast is a lie — `get` returns
+ *   `File | string | null` — so a crafted POST could send a file part
+ *   or an arbitrary string and reach PostgREST unvalidated. Nothing
+ *   catastrophic follows (RLS still gates the row, and Postgres rejects
+ *   a non-UUID for a uuid column), but the failure surfaces as an
+ *   opaque 500-ish error instead of a clean "not found", and it leaves
+ *   the type system asserting something untrue. Validating at the
+ *   boundary keeps the guarantee real.
+ */
+export function parseId(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== "string") return null;
+  const parsed = idSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 // ─── Enums ──────────────────────────────────────────────────────────
 
 export const userRoleSchema = z.enum(["student", "business", "admin"]);

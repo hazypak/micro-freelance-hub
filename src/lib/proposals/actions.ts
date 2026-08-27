@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/guards";
-import { createProposalSchema } from "@/lib/validation/schemas";
+import { createProposalSchema, parseId } from "@/lib/validation/schemas";
 import { createNotification } from "@/lib/notifications/actions";
 import type { ActionResult } from "@/lib/auth/actions";
 
@@ -116,8 +116,8 @@ export async function withdrawProposal(
 ): Promise<ActionResult> {
   const { user } = await requireRole("student");
 
-  const proposalId = formData.get("proposalId") as string;
-  if (!proposalId) return { error: "Proposal ID is required" };
+  const proposalId = parseId(formData.get("proposalId"));
+  if (!proposalId) return { error: "Proposal not found" };
 
   const supabase = await createClient();
 
@@ -177,8 +177,8 @@ export async function acceptProposal(
 ): Promise<ActionResult> {
   const { user } = await requireRole("business");
 
-  const proposalId = formData.get("proposalId") as string;
-  if (!proposalId) return { error: "Proposal ID is required" };
+  const proposalId = parseId(formData.get("proposalId"));
+  if (!proposalId) return { error: "Proposal not found" };
 
   const supabase = await createClient();
 
@@ -260,8 +260,8 @@ export async function rejectProposal(
 ): Promise<ActionResult> {
   const { user } = await requireRole("business");
 
-  const proposalId = formData.get("proposalId") as string;
-  if (!proposalId) return { error: "Proposal ID is required" };
+  const proposalId = parseId(formData.get("proposalId"));
+  if (!proposalId) return { error: "Proposal not found" };
 
   const supabase = await createClient();
 

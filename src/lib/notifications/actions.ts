@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth/guards";
+import { parseId } from "@/lib/validation/schemas";
 import type { NotificationType } from "@/lib/supabase/types";
 import type { ActionResult } from "@/lib/auth/actions";
 
@@ -65,8 +66,8 @@ export async function markNotificationRead(
 ): Promise<ActionResult> {
   await requireAuth();
 
-  const notificationId = formData.get("notificationId") as string;
-  if (!notificationId) return { error: "Notification ID is required" };
+  const notificationId = parseId(formData.get("notificationId"));
+  if (!notificationId) return { error: "Notification not found" };
 
   const supabase = await createClient();
 
