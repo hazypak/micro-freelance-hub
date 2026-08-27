@@ -22,6 +22,14 @@ export type TaskStatus =
 
 export type ProposalStatus = "pending" | "accepted" | "rejected" | "withdrawn";
 
+export type NotificationType =
+  | "proposal_received"
+  | "proposal_accepted"
+  | "proposal_rejected"
+  | "submission_received"
+  | "task_completed"
+  | "task_disputed";
+
 export type VerificationStatus =
   | "pending"
   | "queued"
@@ -73,6 +81,7 @@ export interface Database {
           onboarding_completed?: boolean;
           updated_at?: string;
         };
+        Relationships: [];
       };
       micro_tasks: {
         Row: {
@@ -117,6 +126,15 @@ export interface Database {
           status?: TaskStatus;
           updated_at?: string;
         };
+        Relationships: [
+          {
+            foreignKeyName: "micro_tasks_client_id_fkey";
+            columns: ["client_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       task_proposals: {
         Row: {
@@ -148,6 +166,22 @@ export interface Database {
           status?: ProposalStatus;
           updated_at?: string;
         };
+        Relationships: [
+          {
+            foreignKeyName: "task_proposals_task_id_fkey";
+            columns: ["task_id"];
+            isOneToOne: false;
+            referencedRelation: "micro_tasks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "task_proposals_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       task_assignments: {
         Row: {
@@ -165,6 +199,29 @@ export interface Database {
           assigned_at?: string;
         };
         Update: Record<string, never>;
+        Relationships: [
+          {
+            foreignKeyName: "task_assignments_task_id_fkey";
+            columns: ["task_id"];
+            isOneToOne: false;
+            referencedRelation: "micro_tasks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "task_assignments_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "task_assignments_proposal_id_fkey";
+            columns: ["proposal_id"];
+            isOneToOne: false;
+            referencedRelation: "task_proposals";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       submissions: {
         Row: {
@@ -196,6 +253,22 @@ export interface Database {
           ai_verification_status?: VerificationStatus;
           ai_feedback?: Record<string, unknown> | null;
         };
+        Relationships: [
+          {
+            foreignKeyName: "submissions_task_id_fkey";
+            columns: ["task_id"];
+            isOneToOne: false;
+            referencedRelation: "micro_tasks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submissions_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       reviews: {
         Row: {
@@ -220,6 +293,29 @@ export interface Database {
           rating?: number;
           comment?: string | null;
         };
+        Relationships: [
+          {
+            foreignKeyName: "reviews_task_id_fkey";
+            columns: ["task_id"];
+            isOneToOne: false;
+            referencedRelation: "micro_tasks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "reviews_reviewer_id_fkey";
+            columns: ["reviewer_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "reviews_reviewee_id_fkey";
+            columns: ["reviewee_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       trust_score_events: {
         Row: {
@@ -245,6 +341,49 @@ export interface Database {
           created_at?: string;
         };
         Update: Record<string, never>;
+        Relationships: [
+          {
+            foreignKeyName: "trust_score_events_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      notifications: {
+        Row: {
+          id: string;
+          user_id: string;
+          type: NotificationType;
+          title: string;
+          message: string;
+          link: string | null;
+          read: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          type: NotificationType;
+          title: string;
+          message: string;
+          link?: string | null;
+          read?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          read?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "notifications_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       audit_events: {
         Row: {
@@ -266,6 +405,15 @@ export interface Database {
           created_at?: string;
         };
         Update: Record<string, never>;
+        Relationships: [
+          {
+            foreignKeyName: "audit_events_actor_id_fkey";
+            columns: ["actor_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
     };
     Views: Record<string, never>;
