@@ -188,7 +188,33 @@ export const createTaskSchema = z.object({
     .optional(),
 });
 
-export const updateTaskSchema = createTaskSchema.partial();
+/**
+ * Edit-time task schema.
+ *
+ * ★ Why the two overrides: on edit, the owner must be able to *clear*
+ *   an optional field, and `undefined` cannot express that. supabase-js
+ *   serialises the update payload with JSON.stringify, which drops
+ *   undefined keys entirely — so a "cleared" field silently kept its
+ *   old value. An explicit `null` survives serialisation and nulls the
+ *   column, so both fields accept it here (create still does not: there
+ *   is nothing to clear on a row that doesn't exist yet).
+ */
+export const updateTaskSchema = createTaskSchema.partial().extend({
+  brief: z
+    .string()
+    .max(10000, "Brief must be 10000 characters or fewer")
+    .nullable()
+    .optional(),
+  deadline: z
+    .string()
+    .datetime()
+    .nullable()
+    .optional()
+    .refine(
+      (val) => !val || new Date(val) > new Date(),
+      "Deadline must be in the future"
+    ),
+});
 
 // ─── Proposals ──────────────────────────────────────────────────────
 

@@ -154,6 +154,28 @@ export function TaskForm({ task }: TaskFormProps) {
       JSON.stringify(deliverableTypes),
     );
 
+    // ── Deadline: wall-clock → absolute instant ────────────────────
+    //
+    // ★ `<input type="datetime-local">` submits a bare wall-clock
+    //   string ("2027-03-01T18:30") with no timezone, but the server
+    //   schema requires a full ISO-8601 instant — so an unconverted
+    //   value is rejected outright as invalid input.
+    //
+    //   The conversion has to happen HERE rather than server-side:
+    //   only the browser knows the viewer's UTC offset. The server
+    //   runs in UTC, so it would read a Malaysian client's 18:30 as
+    //   18:30Z — eight hours adrift from what they picked.
+    //
+    //   `new Date("…T18:30")` (no offset) is parsed as local time per
+    //   spec, so toISOString() yields the correct instant. An empty
+    //   value is left as "" — the server reads that as "clear it".
+    if (deadline) {
+      const asInstant = new Date(deadline);
+      if (!Number.isNaN(asInstant.getTime())) {
+        formData.set("deadline", asInstant.toISOString());
+      }
+    }
+
     startTransition(async () => {
       if (isEdit) {
         formData.set("taskId", task.id);

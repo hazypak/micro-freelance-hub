@@ -186,17 +186,23 @@ export async function updateTask(
     if (val) raw[key] = val;
   }
 
-  // Optional text fields — allow clearing (null)
+  // ── Optional fields — an empty submission means "clear it" ──────
+  //
+  // ★ These must map empty → null, NOT undefined. supabase-js builds
+  //   its PATCH body with JSON.stringify, and JSON.stringify drops
+  //   undefined-valued keys — so the previous `|| undefined` produced
+  //   a payload with the field missing entirely, and the column kept
+  //   its old value. Clearing a brief or a deadline silently no-opped.
   for (const key of ["brief"] as const) {
     const val = formData.get(key);
-    if (val !== null) raw[key] = val || undefined;
+    if (val !== null) raw[key] = val || null;
   }
 
   const budget = formData.get("budget");
   if (budget) raw.budget = Number(budget);
 
   const deadline = formData.get("deadline");
-  if (deadline !== null) raw.deadline = deadline || undefined;
+  if (deadline !== null) raw.deadline = deadline || null;
 
   const requiredSkills = formData.get("required_skills");
   if (requiredSkills !== null) {
