@@ -69,14 +69,18 @@ begin
   where p.id = p_proposal_id
   for update of t;
 
+  -- ★ These use the generic user-defined errcode P0001 (raise_exception)
+  --   rather than P0002 (no_data_found), which PL/pgSQL reserves for its
+  --   own failed SELECT INTO STRICT.  Callers match on the message text.
   if not found then
-    raise exception 'proposal not found' using errcode = 'P0002';
+    raise exception 'proposal not found' using errcode = 'P0001';
   end if;
 
   -- Ownership check FIRST so we never leak proposal/task status to
-  -- non-owners (audit finding #4).  Generic error message.
+  -- non-owners (audit finding #4).  Deliberately the SAME message as
+  -- the not-found case — a non-owner cannot tell the two apart.
   if v_client_id <> auth.uid() then
-    raise exception 'proposal not found' using errcode = 'P0002';
+    raise exception 'proposal not found' using errcode = 'P0001';
   end if;
 
   if v_proposal_status <> 'pending' then
@@ -102,14 +106,21 @@ begin
     where id = v_task_id;
 
   -- d. Auto-reject peers and return their ids for notification.
-  --    RETURNING pipes straight into the function's return set.
+  --
+  --    ★ RETURN QUERY takes a *query*, and a data-modifying statement
+  --      only reaches query position inside a WITH clause — so the
+  --      UPDATE is wrapped as a CTE and its RETURNING output selected.
+  --      `return query update ... returning` is a syntax error.
   return query
-    update public.task_proposals
-      set status = 'rejected'
-      where task_id = v_task_id
-        and status = 'pending'
-        and id <> p_proposal_id
-      returning student_id;
+    with rejected as (
+      update public.task_proposals
+        set status = 'rejected'
+        where task_id = v_task_id
+          and status = 'pending'
+          and id <> p_proposal_id
+        returning student_id as sid
+    )
+    select rejected.sid from rejected;
 end;
 $$;
 
@@ -160,6 +171,12 @@ begin
   return new;
 end;
 $$;
+
+-- Dropped first so the whole migration is re-runnable: the function
+-- above uses `create or replace`, and a bare `create trigger` would
+-- otherwise abort a second run with "trigger already exists".
+drop trigger if exists enforce_assignment_requires_accepted_proposal
+  on public.task_assignments;
 
 create trigger enforce_assignment_requires_accepted_proposal
   before insert on public.task_assignments
