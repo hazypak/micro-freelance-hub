@@ -11,51 +11,15 @@ import {
 } from "@/lib/validation/schemas";
 import { createNotification } from "@/lib/notifications/actions";
 import { checkTermsLock } from "@/lib/tasks/terms-lock";
+import { VALID_TRANSITIONS } from "@/lib/tasks/state-machine";
 import type { ActionResult } from "@/lib/auth/actions";
 
 // ─── State Machine ──────────────────────────────────────────────────
 //
-// Encodes every legal task-status transition and who may trigger it.
-//   "client"  = the business that owns the task (micro_tasks.client_id)
-//   "student" = the student assigned to the task (task_assignments)
-//
-// Terminal statuses (completed, cancelled, disputed) have no outgoing
-// edges — once a task lands there, its status is frozen.
-//
-// Student-side transitions (in_progress → submitted) are enforced by
-// specialised actions in later phases (submissions), not by the
-// generic updateTaskStatus action below.  The map is exported so
-// those actions can reuse it for validation.
+// The transition map lives in @/lib/tasks/state-machine, which imports
+// nothing. Import it from there directly — a "use server" module may
+// only export async functions, so this file cannot re-export it.
 // ─────────────────────────────────────────────────────────────────────
-
-export const VALID_TRANSITIONS: Record<
-  string,
-  { to: string; by: "client" | "student" | "system" }[]
-> = {
-  draft: [
-    { to: "open", by: "client" },
-    { to: "cancelled", by: "client" },
-  ],
-  open: [
-    // "system" — this transition happens inside the accept_proposal RPC.
-    // It is illegal to invoke via updateTaskStatus (audit finding #3);
-    // the guard below rejects it explicitly, and the DB-level trigger
-    // added in migration 005 refuses to insert an assignment against a
-    // non-accepted proposal, closing the same hole at two layers.
-    { to: "in_progress", by: "system" },
-    { to: "cancelled", by: "client" },
-  ],
-  in_progress: [
-    { to: "submitted", by: "student" }, // handled by submission action
-  ],
-  submitted: [
-    { to: "client_review", by: "client" },
-  ],
-  client_review: [
-    { to: "completed", by: "client" },
-    { to: "disputed", by: "client" },
-  ],
-};
 
 // ─── Create Task ────────────────────────────────────────────────────
 

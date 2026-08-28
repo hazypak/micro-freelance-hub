@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/guards";
 import { createSubmissionSchema, parseId } from "@/lib/validation/schemas";
 import { createNotification } from "@/lib/notifications/actions";
-import { VALID_TRANSITIONS } from "@/lib/tasks/actions";
+import { VALID_TRANSITIONS } from "@/lib/tasks/state-machine";
 import type { ActionResult } from "@/lib/auth/actions";
 
 // ─── Storage path safety ──────────────────────────────────────────
