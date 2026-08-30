@@ -40,19 +40,19 @@ const ALLOWED_EXTENSIONS = [
   ".zip", ".txt", ".md", ".docx",
 ];
 
-// ────────────────────────────────────────────────────────────────────
-// ★ YOUR CODE OPPORTUNITY — validateFile()
-//
-// This is where you'll write the client-side file validation logic.
-// The function checks that a file meets the upload requirements
-// BEFORE it's sent to Supabase Storage — catching bad files early
-// saves bandwidth and gives instant feedback.
-//
-// See the TODO comment inside the function body below.
-// ────────────────────────────────────────────────────────────────────
-
+/**
+ * Client-side pre-flight check, run before the file is handed to
+ * Supabase Storage — catching a bad file here saves an upload round-trip
+ * and gives the student instant feedback instead of a late failure.
+ *
+ * ★ This is a convenience, NOT a security boundary. It runs in the
+ *   browser and is trivially bypassed. The real enforcement is the
+ *   "Deliverables: upload" storage policy (migration 004), which ties
+ *   every write to an existing task_assignment for the calling student.
+ *
+ * @returns an error message to display, or null when the file is fine.
+ */
 function validateFile(file: File): string | null {
-  // TODO: You'll implement this — see instructions after the component
   if (!ALLOWED_MIME_TYPES.includes(file.type as (typeof ALLOWED_MIME_TYPES)[number])) {
     return `File type not allowed. Accepted: ${ALLOWED_EXTENSIONS.join(", ")}`;
   }
