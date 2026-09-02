@@ -16,6 +16,9 @@ const clientEnvSchema = z.object({
     .url("NEXT_PUBLIC_SITE_URL must be a valid URL")
     .optional()
     .default("http://localhost:3000"),
+  NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY: z
+    .string()
+    .min(1, "NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY is required"),
 });
 
 /**
@@ -26,6 +29,9 @@ const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z
     .string()
     .min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  TURNSTILE_SECRET_KEY: z
+    .string()
+    .min(1, "TURNSTILE_SECRET_KEY is required"),
 });
 
 export type ClientEnv = z.infer<typeof clientEnvSchema>;
@@ -45,6 +51,8 @@ export function getClientEnv(): ClientEnv {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
+    NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY:
+      process.env.NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY,
   });
 
   if (!parsed.success) {
@@ -70,6 +78,7 @@ export function getServerEnv(): ServerEnv {
 
   const parsed = serverEnvSchema.safeParse({
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    TURNSTILE_SECRET_KEY: process.env.TURNSTILE_SECRET_KEY,
   });
 
   if (!parsed.success) {
