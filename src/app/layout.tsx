@@ -22,12 +22,18 @@ const siteDescription =
   "Connect with student creators for quick, quality micro-tasks. " +
   "Post work, discover talent, and build trust — all in one place.";
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+let metadataBase: URL;
+try {
+  metadataBase = new URL(siteUrl ?? "http://localhost:3000");
+} catch {
+  metadataBase = new URL("http://localhost:3000");
+}
+
 export const metadata: Metadata = {
   title: { default: siteTitle, template: `%s · GigBridge` },
   description: siteDescription,
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
-  ),
+  metadataBase,
 
   /* Open Graph */
   openGraph: {
